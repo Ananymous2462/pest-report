@@ -1,3 +1,5 @@
-Flask_cors
+Flask
 python-dotenv
 gunicorn
+flask_cors
+cloudinary

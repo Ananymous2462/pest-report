@@ -7,24 +7,21 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# Load environment variables from .env file (for local testing)
-# On Render, these will be set directly in Render's dashboard.
 load_dotenv()
 
-# --- Configuration (from Environment Variables) ---
+# --- Email Configuration (using SendGrid via SMTP) ---
 SENDER_EMAIL = os.getenv('SENDER_EMAIL')
-SENDER_PASSWORD = os.getenv('SENDER_PASSWORD')
+SENDER_PASSWORD = os.getenv('SENDER_PASSWORD') # This is now your SendGrid API Key
 RECEIVER_EMAIL = os.getenv('RECEIVER_EMAIL') # The email to send the report TO
-SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
-SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
+SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.sendgrid.net') # SendGrid's SMTP server
+SMTP_PORT = int(os.getenv('SMTP_PORT', 587)) # SendGrid's SMTP port (TLS)
 
-# Path to the file where form submissions are stored
 SUBMISSIONS_FILE = 'data/submissions.json'
 
 def send_email(subject, body, to_email):
     """
     Sends an email using SMTP.
-    This function is reused from app.py to send the weekly report.
+    Updated to use SendGrid's specific login (username 'apikey').
     """
     if not SENDER_EMAIL or not SENDER_PASSWORD:
         print("Email sender credentials not set. Cannot send report email.")
@@ -39,19 +36,18 @@ def send_email(subject, body, to_email):
 
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
-            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            # For SendGrid, the username is 'apikey', and password is the API Key
+            server.login('apikey', SENDER_PASSWORD)
             server.send_message(msg)
         print(f"Report email sent successfully to {to_email}")
         return True
     except Exception as e:
         print(f"Failed to send report email: {e}")
+        print(f"Error details: {e.args}") # Print error arguments for more details
         return False
 
 def generate_weekly_report():
-    """
-    Generates a text-based report from submissions recorded in the last 7 days.
-    """
-    # Check if the submissions file exists
+    """Generates a text-based report from submissions recorded in the last 7 days."""
     if not os.path.exists(SUBMISSIONS_FILE):
         print("No submissions file found. No report generated.")
         return "No submissions data available for the weekly report."
@@ -79,7 +75,6 @@ def generate_weekly_report():
                     recent_submissions.append(s)
             except ValueError:
                 print(f"Warning: Invalid timestamp format found: {s['timestamp']}")
-                # Skip this submission if timestamp is invalid
                 continue
 
     if not recent_submissions:
@@ -96,11 +91,11 @@ def generate_weekly_report():
         report_lines.append(f"  Name: {sub.get('yourName', 'N/A')}")
         report_lines.append(f"  Business Area: {sub.get('businessArea', 'N/A')}")
         report_lines.append(f"  Pest(s): {', '.join(sub.get('pests', []))}")
-        if sub.get('otherPest'): # Only include if 'otherPest' has a value
+        if sub.get('otherPest') and sub.get('otherPest').strip() != 'N/A' and sub.get('otherPest').strip() != '': # Check if it's not empty or default 'N/A'
             report_lines.append(f"  Other Pest: {sub.get('otherPest')}")
         report_lines.append(f"  Date of Incident: {sub.get('reportDate', 'N/A')}")
-        report_lines.append(f"  Image File: {sub.get('imageFileName', 'No file uploaded')}")
         report_lines.append(f"  Notes: {sub.get('additionalNotes', 'N/A')}")
+        report_lines.append(f"  Image URL: {sub.get('image_url', 'No image uploaded')}") # Include image URL
         report_lines.append(f"  Submitted On: {datetime.fromisoformat(sub['timestamp']).strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     return "\n".join(report_lines)
@@ -116,10 +111,7 @@ if __name__ == '__main__':
         print("Failed to send weekly report. Check logs for details.")
 
     # Optional: Clear old data after reporting to prevent the file from growing indefinitely.
-    # For a more robust solution, consider moving old data to an archive or using a database.
     try:
-        # Re-read the file to ensure we don't accidentally clear new submissions
-        # that might have come in while the report was being generated.
         if os.path.exists(SUBMISSIONS_FILE):
             with open(SUBMISSIONS_FILE, 'r') as f:
                 all_submissions = json.load(f)

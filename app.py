@@ -1,6 +1,6 @@
 # app.py
 from flask import Flask, request, jsonify
-from flask_cors import CORS # We need this for security between your website and backend
+from flask_cors import CORS
 import os
 import json
 import smtplib
@@ -9,23 +9,32 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from dotenv import load_dotenv
 
+# --- NEW IMPORTS FOR CLOUDINARY ---
+import cloudinary
+import cloudinary.uploader
+
 # Load environment variables from .env file (for local testing)
-# On Render, these will be set directly in Render's dashboard.
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app) # Enable Cross-Origin Resource Sharing for all routes
+# Enable CORS for all origins. For production, consider restricting to your frontend domain.
+CORS(app)
 
-# --- Configuration (from Environment Variables) ---
-# These values will be loaded from your .env file locally,
-# and from Render's environment settings when deployed.
+# --- Email Configuration (using SendGrid via SMTP) ---
 SENDER_EMAIL = os.getenv('SENDER_EMAIL')
-SENDER_PASSWORD = os.getenv('SENDER_PASSWORD')
+SENDER_PASSWORD = os.getenv('SENDER_PASSWORD') # This is now your SendGrid API Key
 RECEIVER_EMAIL = os.getenv('RECEIVER_EMAIL')
-SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.gmail.com') # Default for Gmail
-SMTP_PORT = int(os.getenv('SMTP_PORT', 587)) # Default for Gmail (TLS)
+SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.sendgrid.net') # SendGrid's SMTP server
+SMTP_PORT = int(os.getenv('SMTP_PORT', 587)) # SendGrid's SMTP port (TLS)
 
-# Path to store submission data
+# --- Cloudinary Configuration ---
+cloudinary.config(
+    cloud_name = os.getenv('CLOUDINARY_CLOUD_NAME'),
+    api_key = os.getenv('CLOUDINARY_API_KEY'),
+    api_secret = os.getenv('CLOUDINARY_API_SECRET')
+)
+
+# Path to store submission data (still using JSON file for now)
 SUBMISSIONS_FILE = 'data/submissions.json'
 
 # Ensure the 'data' directory exists
@@ -35,6 +44,7 @@ def send_email(subject, body, to_email):
     """
     Sends an email using SMTP.
     This function connects to an email server and sends a message.
+    Updated to use SendGrid's specific login (username 'apikey').
     """
     if not SENDER_EMAIL or not SENDER_PASSWORD:
         print("Email sender credentials not set. Cannot send email.")
@@ -47,73 +57,112 @@ def send_email(subject, body, to_email):
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
 
-        # Connect to the SMTP server
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls() # Upgrade the connection to a secure encrypted SSL/TLS connection
-            server.login(SENDER_EMAIL, SENDER_PASSWORD) # Log in to your email account
+            # For SendGrid, the username is 'apikey', and password is the API Key
+            server.login('apikey', SENDER_PASSWORD)
             server.send_message(msg) # Send the email
         print(f"Email sent successfully to {to_email}")
         return True
     except Exception as e:
         print(f"Failed to send email: {e}")
+        print(f"Error details: {e.args}") # Print error arguments for more details
         return False
 
-def save_submission(data):
-    """
-    Appends form submission data to a JSON file.
-    This is a simple way to store data for the weekly report.
-    NOTE: On Render's free tier, this file might be lost if the server restarts.
-    For persistent data, a database (like PostgreSQL) is recommended.
-    """
+# NOTE: save_submission function will now be updated inside submit_report
+# to handle the new structure including image_url.
+# We'll keep it as a helper function for clarity.
+def save_submission(submission_record):
+    """Appends form submission data to a JSON file."""
     try:
-        # Check if the submissions file exists. If not, create it with an empty list.
         if not os.path.exists(SUBMISSIONS_FILE):
             with open(SUBMISSIONS_FILE, 'w') as f:
-                json.dump([], f)
+                json.dump([], f) # Initialize with an empty list
 
-        # Read existing data, append new data, and write it back
         with open(SUBMISSIONS_FILE, 'r+') as f:
-            file_data = json.load(f) # Load all existing submissions
-            file_data.append(data) # Add the new submission
-            f.seek(0) # Move cursor to the beginning of the file
-            json.dump(file_data, f, indent=4) # Write all data back, formatted nicely
+            file_data = json.load(f)
+            file_data.append(submission_record)
+            f.seek(0) # Rewind to the beginning of the file
+            json.dump(file_data, f, indent=4)
+            f.truncate() # Ensure old content is removed if new content is smaller
         print("Submission saved to file.")
         return True
     except Exception as e:
         print(f"Failed to save submission: {e}")
         return False
 
+
 @app.route('/submit-report', methods=['POST'])
 def submit_report():
     """
-    This is the endpoint that your frontend form will send data to.
-    It receives JSON data, saves it, and sends an immediate email.
+    Receives form data (including potential file upload),
+    uploads image to Cloudinary, saves data, and sends email notification.
     """
-    # Ensure the incoming request is JSON
-    if not request.is_json:
-        return jsonify({"message": "Request must be JSON"}), 400
+    # When frontend sends FormData, text fields are in request.form
+    # and files are in request.files.
+    # The frontend is sending JSON data as a 'jsonData' field.
+    json_data_str = request.form.get('jsonData')
+    if not json_data_str:
+        return jsonify({"message": "No JSON data found in request.form"}), 400
 
-    data = request.get_json() # Get the JSON data sent from the frontend
+    try:
+        data = json.loads(json_data_str)
+    except json.JSONDecodeError:
+        return jsonify({"message": "Invalid JSON data provided"}), 400
 
-    # Add a timestamp to the submission data
-    data['timestamp'] = datetime.now().isoformat()
+    # Extract data from the parsed JSON
+    your_name = data.get('yourName', 'N/A')
+    business_area = data.get('businessArea', 'N/A')
+    pests = data.get('pests', [])
+    other_pest = data.get('otherPest', 'N/A')
+    report_date = data.get('reportDate', 'N/A')
+    additional_notes = data.get('additionalNotes', 'N/A')
+
+    # --- Handle Image Upload to Cloudinary ---
+    image_file = request.files.get('imageFile') # 'imageFile' is the key from frontend FormData
+    image_url = "No image uploaded" # Default value if no image or upload fails
+
+    if image_file and image_file.filename:
+        try:
+            # Upload the image to Cloudinary
+            # 'folder' helps organize uploads in your Cloudinary account
+            upload_result = cloudinary.uploader.upload(image_file, folder="pest_reports")
+            image_url = upload_result.get('secure_url') # Get the secure HTTPS URL of the uploaded image
+            print(f"Image uploaded to Cloudinary: {image_url}")
+        except Exception as e:
+            print(f"Failed to upload image to Cloudinary: {e}")
+            image_url = "Image upload failed" # Indicate failure in the report
+    else:
+        print("No image file provided in submission.")
+
+    # Prepare the complete submission record (including image_url)
+    submission_record = {
+        "timestamp": datetime.now().isoformat(),
+        "yourName": your_name,
+        "businessArea": business_area,
+        "pests": pests,
+        "otherPest": other_pest,
+        "reportDate": report_date,
+        "additionalNotes": additional_notes,
+        "image_url": image_url # Store the Cloudinary URL
+    }
 
     # --- Save data for weekly report ---
-    if not save_submission(data):
+    if not save_submission(submission_record):
         return jsonify({"message": "Error saving submission"}), 500
 
     # --- Send immediate email notification ---
-    subject = f"New Pest Report from {data.get('yourName', 'Unknown')}"
+    subject = f"New Pest Report from {your_name}"
     body = (
         f"A new pest report has been submitted:\n\n"
-        f"Name: {data.get('yourName', 'N/A')}\n"
-        f"Business Area: {data.get('businessArea', 'N/A')}\n"
-        f"Pest(s): {', '.join(data.get('pests', []))}\n"
-        f"Other Pest: {data.get('otherPest', 'N/A')}\n"
-        f"Date: {data.get('reportDate', 'N/A')}\n"
-        f"Image File: {data.get('imageFileName', 'No file uploaded')}\n"
-        f"Notes: {data.get('additionalNotes', 'N/A')}\n"
-        f"Submitted At: {data.get('timestamp')}"
+        f"Name: {your_name}\n"
+        f"Business Area: {business_area}\n"
+        f"Pest(s): {', '.join(pests)}\n"
+        f"Other Pest: {other_pest}\n"
+        f"Date: {report_date}\n"
+        f"Notes: {additional_notes}\n"
+        f"Image URL: {image_url}\n" # Include the image URL in the email
+        f"Submitted At: {submission_record['timestamp']}"
     )
 
     if send_email(subject, body, RECEIVER_EMAIL):
@@ -123,12 +172,8 @@ def submit_report():
 
 @app.route('/')
 def home():
-    """
-    A simple home route to check if the backend is running.
-    """
+    """A simple home route to check if the backend is running."""
     return "Pest Reporting Backend is running!"
 
 if __name__ == '__main__':
-    # This block runs only when you execute app.py directly (e.g., python app.py)
-    # It's for local testing. On Render, Gunicorn will run your app.
     app.run(debug=True, port=5000)
