@@ -37,7 +37,7 @@ def send_email(subject, body, to_email):
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             # For SendGrid, the username is 'apikey', and password is the API Key
-            server.login('apikey', SENDER_PASSWORD)
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg)
         print(f"Report email sent successfully to {to_email}")
         return True

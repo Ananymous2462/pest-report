@@ -60,7 +60,7 @@ def send_email(subject, body, to_email):
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls() # Upgrade the connection to a secure encrypted SSL/TLS connection
             # For SendGrid, the username is 'apikey', and password is the API Key
-            server.login('apikey', SENDER_PASSWORD)
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg) # Send the email
         print(f"Email sent successfully to {to_email}")
         return True
