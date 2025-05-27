@@ -14,18 +14,20 @@ import cloudinary
 import cloudinary.uploader
 
 # Load environment variables from .env file (for local testing)
+# On Render, these will be set directly in Render's dashboard.
 load_dotenv()
 
 app = Flask(__name__)
 # Enable CORS for all origins. For production, consider restricting to your frontend domain.
 CORS(app)
 
-# --- Email Configuration (using SendGrid via SMTP) ---
+# --- Email Configuration (using Resend via SMTP) ---
 SENDER_EMAIL = os.getenv('SENDER_EMAIL')
-SENDER_PASSWORD = os.getenv('SENDER_PASSWORD') # This is now your SendGrid API Key
+SENDER_PASSWORD = os.getenv('SENDER_PASSWORD') # This is your Resend API Key
 RECEIVER_EMAIL = os.getenv('RECEIVER_EMAIL')
-SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.sendgrid.net') # SendGrid's SMTP server
-SMTP_PORT = int(os.getenv('SMTP_PORT', 587)) # SendGrid's SMTP port (TLS)
+# Set default SMTP_SERVER to Resend's server for robustness
+SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.resend.com')
+SMTP_PORT = int(os.getenv('SMTP_PORT', 587)) # Standard TLS port
 
 # --- Cloudinary Configuration ---
 cloudinary.config(
@@ -34,7 +36,7 @@ cloudinary.config(
     api_secret = os.getenv('CLOUDINARY_API_SECRET')
 )
 
-# Path to store submission data (still using JSON file for now)
+# Path to store submission data
 SUBMISSIONS_FILE = 'data/submissions.json'
 
 # Ensure the 'data' directory exists
@@ -44,7 +46,7 @@ def send_email(subject, body, to_email):
     """
     Sends an email using SMTP.
     This function connects to an email server and sends a message.
-    Updated to use SendGrid's specific login (username 'apikey').
+    Configured for Resend (using SENDER_EMAIL as username and API Key as password).
     """
     if not SENDER_EMAIL or not SENDER_PASSWORD:
         print("Email sender credentials not set. Cannot send email.")
@@ -59,7 +61,7 @@ def send_email(subject, body, to_email):
 
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls() # Upgrade the connection to a secure encrypted SSL/TLS connection
-            # For SendGrid, the username is 'apikey', and password is the API Key
+            # For Resend, use the sender email as the username and the API Key as the password
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg) # Send the email
         print(f"Email sent successfully to {to_email}")
@@ -69,9 +71,6 @@ def send_email(subject, body, to_email):
         print(f"Error details: {e.args}") # Print error arguments for more details
         return False
 
-# NOTE: save_submission function will now be updated inside submit_report
-# to handle the new structure including image_url.
-# We'll keep it as a helper function for clarity.
 def save_submission(submission_record):
     """Appends form submission data to a JSON file."""
     try:
@@ -114,7 +113,7 @@ def submit_report():
     your_name = data.get('yourName', 'N/A')
     business_area = data.get('businessArea', 'N/A')
     pests = data.get('pests', [])
-    other_pest = data.get('otherPest', 'N/A')
+    other_pest = data.get('otherPest', '') # Keep as empty string if not provided
     report_date = data.get('reportDate', 'N/A')
     additional_notes = data.get('additionalNotes', 'N/A')
 
@@ -158,7 +157,7 @@ def submit_report():
         f"Name: {your_name}\n"
         f"Business Area: {business_area}\n"
         f"Pest(s): {', '.join(pests)}\n"
-        f"Other Pest: {other_pest}\n"
+        + (f"Other Pest: {other_pest}\n" if other_pest else "") + # Only include if other_pest has a value
         f"Date: {report_date}\n"
         f"Notes: {additional_notes}\n"
         f"Image URL: {image_url}\n" # Include the image URL in the email

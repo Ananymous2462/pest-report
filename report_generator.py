@@ -9,19 +9,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- Email Configuration (using SendGrid via SMTP) ---
+# --- Email Configuration (using Resend via SMTP) ---
 SENDER_EMAIL = os.getenv('SENDER_EMAIL')
-SENDER_PASSWORD = os.getenv('SENDER_PASSWORD') # This is now your SendGrid API Key
+SENDER_PASSWORD = os.getenv('SENDER_PASSWORD') # This is your Resend API Key
 RECEIVER_EMAIL = os.getenv('RECEIVER_EMAIL') # The email to send the report TO
-SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.sendgrid.net') # SendGrid's SMTP server
-SMTP_PORT = int(os.getenv('SMTP_PORT', 587)) # SendGrid's SMTP port (TLS)
+# Set default SMTP_SERVER to Resend's server for robustness
+SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.resend.com')
+SMTP_PORT = int(os.getenv('SMTP_PORT', 587)) # Standard TLS port
 
 SUBMISSIONS_FILE = 'data/submissions.json'
 
 def send_email(subject, body, to_email):
     """
     Sends an email using SMTP.
-    Updated to use SendGrid's specific login (username 'apikey').
+    Configured for Resend (using SENDER_EMAIL as username and API Key as password).
     """
     if not SENDER_EMAIL or not SENDER_PASSWORD:
         print("Email sender credentials not set. Cannot send report email.")
@@ -36,7 +37,7 @@ def send_email(subject, body, to_email):
 
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
-            # For SendGrid, the username is 'apikey', and password is the API Key
+            # For Resend, use the sender email as the username and the API Key as the password
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg)
         print(f"Report email sent successfully to {to_email}")
@@ -91,7 +92,7 @@ def generate_weekly_report():
         report_lines.append(f"  Name: {sub.get('yourName', 'N/A')}")
         report_lines.append(f"  Business Area: {sub.get('businessArea', 'N/A')}")
         report_lines.append(f"  Pest(s): {', '.join(sub.get('pests', []))}")
-        if sub.get('otherPest') and sub.get('otherPest').strip() != 'N/A' and sub.get('otherPest').strip() != '': # Check if it's not empty or default 'N/A'
+        if sub.get('otherPest') and sub.get('otherPest').strip() != '': # Only include if 'otherPest' has a non-empty value
             report_lines.append(f"  Other Pest: {sub.get('otherPest')}")
         report_lines.append(f"  Date of Incident: {sub.get('reportDate', 'N/A')}")
         report_lines.append(f"  Notes: {sub.get('additionalNotes', 'N/A')}")
